@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trofo</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#E4EFEC">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Trofo">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gabarito:wght@400;600;800&amp;display=swap">
+<style>
+  /* Only the unlock screen lives here. The app's own styles arrive encrypted with the app. */
+  :root { --ground: #E4EFEC; --surface: #F7FBFA; --ink: #13242A; --ink2: #4A5D62; --teal: #0D4C57; --steel: #DCE6E7; }
+  html, body { margin: 0; background: var(--ground); color: var(--ink); font-family: 'Gabarito', system-ui, -apple-system, sans-serif; -webkit-text-size-adjust: 100%; }
+  * { box-sizing: border-box; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .lock { max-width: 430px; min-height: 100dvh; margin: 0 auto; display: flex; flex-direction: column; padding: calc(env(safe-area-inset-top) + 16vh) 20px calc(env(safe-area-inset-bottom) + 24px); }
+  .lock[hidden] { display: none; }
+  .lock .mark { width: 72px; height: 72px; border-radius: 20px; display: block; }
+  .lock h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.01em; margin: 28px 0 8px; }
+  .lock p { margin: 0; font-size: 16px; line-height: 1.4; color: var(--ink2); }
+  .lock form { margin-top: 28px; display: flex; flex-direction: column; }
+  .lock input[type=password] { font: inherit; font-size: 18px; padding: 16px 18px; border-radius: 18px; border: 2px solid var(--steel); background: var(--surface); color: var(--ink); outline: none; }
+  .lock input[type=password]:focus { border-color: var(--teal); }
+  .lock .err { color: #A3332A; font-size: 14px; min-height: 20px; margin: 10px 0 6px; }
+  .lock button { font: inherit; font-size: 17px; font-weight: 600; padding: 17px; border: 0; border-radius: 999px; background: var(--teal); color: #fff; cursor: pointer; }
+  .lock button:disabled { opacity: 0.6; }
+  .lock button:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+</style>
+</head>
+<body>
+<section class="lock" id="lock" hidden>
+  <img class="mark" src="icons/icon-192.png" alt="">
+  <h1 id="lock-title">Enter your password</h1>
+  <p id="lock-sub">Trofo is private. You only need to do this once on each phone.</p>
+  <form id="lock-form">
+    <input class="visually-hidden" type="text" name="username" autocomplete="username" value="Trofo" tabindex="-1" aria-hidden="true">
+    <label class="visually-hidden" for="lock-pw">Password</label>
+    <input id="lock-pw" name="password" type="password" autocomplete="current-password" placeholder="Password" required>
+    <p class="err" id="lock-err" role="alert"></p>
+    <button type="submit" id="lock-btn">Unlock</button>
+  </form>
+</section>
+<div id="sprite" aria-hidden="true"></div>
+<main id="app" class="screen" aria-live="polite"></main>
+<input id="camera" class="visually-hidden" type="file" accept="image/*" capture="environment" aria-label="Take a photo of your meal">
+<noscript>Trofo needs JavaScript turned on.</noscript>
+<script type="module">
+// Unlocks the encrypted app (app.bin) with a key made from the password, then starts it.
+// The key is kept on this device so the password is only asked for once.
+const SAVED = 'plateful.unlock'; // first name kept, so saved data carries over
+const $ = id => document.getElementById(id);
+const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const toB64 = a => btoa(String.fromCharCode(...a));
+
+class WrongPassword extends Error {}
+
+async function keyFrom(password) {
+  const lock = await (await fetch('lock.json', { cache: 'no-store' })).json();
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password.normalize('NFC')), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: fromB64(lock.salt), iterations: lock.iter }, base, 256);
+  return new Uint8Array(bits);
+}
+
+async function openApp(raw) {
+  const res = await fetch('app.bin', { cache: 'no-store' });
+  if (!res.ok) throw new Error('app.bin ' + res.status);
+  const box = new Uint8Array(await res.arrayBuffer());
+  const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+  let plain;
+  try { plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: box.subarray(0, 12) }, key, box.subarray(12)); }
+  catch { throw new WrongPassword(); }
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+async function start(app) {
+  const style = document.createElement('style');
+  style.textContent = app.css;
+  document.head.append(style);
+  $('sprite').innerHTML = app.sprite;
+  globalThis.TROFO_BACKUP = app.backup || null;
+  $('lock').remove();
+  await import(URL.createObjectURL(new Blob([app.js], { type: 'text/javascript' })));
+}
+
+function showLock(title, sub, error = '') {
+  if (title) $('lock-title').textContent = title;
+  if (sub) $('lock-sub').textContent = sub;
+  $('lock-err').textContent = error;
+  $('lock').hidden = false;
+}
+
+$('lock-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const btn = $('lock-btn');
+  btn.disabled = true; btn.textContent = 'Unlocking…'; $('lock-err').textContent = '';
+  try {
+    const raw = await keyFrom($('lock-pw').value);
+    const app = await openApp(raw);
+    try { localStorage.setItem(SAVED, toB64(raw)); } catch {}
+    await start(app);
+  } catch (err) {
+    $('lock-err').textContent = err instanceof WrongPassword ? 'That password didn’t work. Try again.' : 'Trofo couldn’t load. Check your internet and try again.';
+    btn.disabled = false; btn.textContent = 'Unlock';
+    $('lock-pw').select();
+  }
+});
+
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+
+if (!window.crypto || !crypto.subtle) {
+  showLock('Can’t unlock here', 'Open Trofo from its https address in Safari.');
+  $('lock-form').hidden = true;
+} else {
+  let saved = null;
+  try { saved = localStorage.getItem(SAVED); } catch {}
+  if (!saved) showLock();
+  else {
+    try { await start(await openApp(fromB64(saved))); }
+    catch (err) {
+      if (err instanceof WrongPassword) {
+        try { localStorage.removeItem(SAVED); } catch {}
+        showLock('Enter the new password', 'Trofo’s password has changed since you last opened it.');
+      } else showLock(null, null, 'Trofo couldn’t load. Check your internet and try again.');
+    }
+  }
+}
+</script>
+</body>
+</html>
